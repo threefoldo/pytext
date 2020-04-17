@@ -2,7 +2,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import itertools
-import time
+import time, re
 from contextlib import ExitStack as contextlib_ExitStack
 from typing import Any, Iterable, List, Optional, Tuple
 
@@ -29,9 +29,45 @@ from pytext.task.serialize import save
 from pytext.trainers.training_state import TrainingState
 from pytext.utils import cuda, distributed, precision, timing
 
+_camel_re1 = re.compile('(.)([A-Z][a-z]+)')
+_camel_re2 = re.compile('([a-z0-9])([A-Z])')
+
+
+def camel2snake(name):
+    s1 = re.sub(_camel_re1, r'\1_\2', name)
+    return re.sub(_camel_re2, r'\1_\2', s1).lower()
+
+
+def listify(o):
+    if o is None: return []
+    if isinstance(o, list): return o
+    if isinstance(o, str): return [o]
+    if isinstance(o, Iterable): return list(o)
+    return [o]
+
+
+class Callback():
+    _order=0
+    def set_runner(self, run): self.run=run
+    def __getattr__(self, k): return getattr(self.run, k)
+    @property
+    def name(self):
+        name = re.sub(r'Callback$', '', self.__class__.__name__)
+        return camel2snake(name or 'callback')
+
 
 class TrainerBase(Component):
     __COMPONENT_TYPE__ = ComponentType.TRAINER
+
+    def __init__(self, cbs=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cbs = listify(cbs)
+
+    def __call__(self, cb_name):
+        for cb in sorted(self.cbs, key=lambda x: x._order):
+            f = getattr(cb, cb_name, None)
+            if f and f(): return True
+        return False
 
 
 def cycle(iterator: Iterable[Any]) -> Iterable[Any]:
@@ -120,7 +156,9 @@ class Trainer(TrainerBase):
         #: https://arxiv.org/abs/1710.03740
         fp16_args: FP16Optimizer.Config = FP16OptimizerFairseq.Config()
 
-    def __init__(self, config: Config, model: torch.nn.Module):
+    def __init__(self, config: Config, model: torch.nn.Module, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
         if config.early_stop_after > 0:
             assert config.do_eval, "can't do early stopping when not running evalution"
 
@@ -352,6 +390,8 @@ class Trainer(TrainerBase):
         Returns:
             model, best_metric: the trained model together with the best metric
         """
+        for cb in self.cbs: cb.set_runner(self)
+
         state = TrainingState(
             model=model,
             optimizer=self.optimizer,
@@ -488,6 +528,8 @@ class Trainer(TrainerBase):
         report_metric = state.stage != Stage.TRAIN or self.config.report_train_metrics
         model = state.model
         samples = []
+        
+        if self('begin_epoch'): return
 
         """
         Sometimes, a batch of inputs is too large to fit into GPU, which has to
@@ -526,6 +568,7 @@ class Trainer(TrainerBase):
         else:
             metric_reporter._reset()
 
+        if self('after_epoch'): return
         return metrics
 
     @timing.time("run_step")
@@ -538,6 +581,7 @@ class Trainer(TrainerBase):
     ):
         sample_size = len(samples)
         assert sample_size <= self.config.num_accumulated_batches
+        if self('begin_batch'): return
 
         model = state.model
         self.zero_grads(state)
@@ -581,6 +625,7 @@ class Trainer(TrainerBase):
         # update gradients after len(samples) forward & backward
         self.optimizer_step(state)
         self.sparsification_step(state)
+        self('after_batch')
 
 
 class TaskTrainer(Trainer):
