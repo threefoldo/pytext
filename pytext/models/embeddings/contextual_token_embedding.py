@@ -27,15 +27,15 @@ class ContextualTokenEmbedding(EmbeddingBase):
 
         # Unflatten embedding Tensor from (batch_size, seq_len * embedding_size)
         # to (batch_size, seq_len, embedding_size).
-        # TODO: Predictor forward compatibility issue: change back once
-        # D18945316 is available on predictor:
+        # TODO (T65593460): Predictor forward compatibility issue: change back
+        # once D18945316 is available on predictor:
         # num_tokens = embedding_shape[1] // self.embedding_dim
-        num_tokens = (embedding_shape[1] / self.embedding_dim).type(dtype=torch.long)
+        num_tokens = (embedding_shape[1] / self.embedding_dim).long()
         new_embedding_shape = torch.cat(
             (
-                torch.LongTensor([-1]),
+                torch.tensor([-1], dtype=torch.long),
                 num_tokens.view(1),
-                torch.LongTensor([self.embedding_dim]),
+                torch.tensor([self.embedding_dim], dtype=torch.long),
             )
         )
         return torch.onnx.operators.reshape_from_tensor_shape(
