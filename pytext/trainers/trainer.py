@@ -158,7 +158,7 @@ class Trainer(TrainerBase):
 
     def __init__(self, config: Config, model: torch.nn.Module, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         if config.early_stop_after > 0:
             assert config.do_eval, "can't do early stopping when not running evalution"
 
@@ -442,6 +442,7 @@ class Trainer(TrainerBase):
         )
         print(f"Model :{model}")
         print(f"Num trainable parameters: {trainable_params}")
+        self('before_train')
 
         while self.continue_training(state):
             state.epoch += 1
@@ -464,7 +465,9 @@ class Trainer(TrainerBase):
                     epoch_data = itertools.islice(
                         epoch_data, self.config.num_batches_per_epoch
                     )
+                if self('before_epoch'): break
                 self.run_epoch(state, epoch_data, metric_reporter)
+                if self('after_epoch'): break
 
             if not self.config.do_eval:
                 continue
@@ -472,9 +475,9 @@ class Trainer(TrainerBase):
             with timing.time("eval epoch"):
                 state.stage = Stage.EVAL
                 model.eval(Stage.EVAL)
-                print(f"start evaluating epoch {state.epoch}")
+                print(f"start evaluating epoch {state.epoch}")                
                 with torch.no_grad():
-                    eval_metric = self.run_epoch(state, eval_data, metric_reporter)
+                    eval_metric = self.run_epoch(state, eval_data, metric_reporter)                
 
             # Step the learning rate scheduler(s)
             assert eval_metric is not None
@@ -516,6 +519,7 @@ class Trainer(TrainerBase):
         ):
             self.load_best_model(state)
 
+        self('after_train')
         return state.model, state.best_model_metric
 
     @timing.report_snapshot
@@ -528,8 +532,6 @@ class Trainer(TrainerBase):
         report_metric = state.stage != Stage.TRAIN or self.config.report_train_metrics
         model = state.model
         samples = []
-        
-        if self('begin_epoch'): return
 
         """
         Sometimes, a batch of inputs is too large to fit into GPU, which has to
@@ -567,8 +569,7 @@ class Trainer(TrainerBase):
                 )
         else:
             metric_reporter._reset()
-
-        if self('after_epoch'): return
+        
         return metrics
 
     @timing.time("run_step")
@@ -581,6 +582,7 @@ class Trainer(TrainerBase):
     ):
         sample_size = len(samples)
         assert sample_size <= self.config.num_accumulated_batches
+
         if self('begin_batch'): return
 
         model = state.model
@@ -605,6 +607,8 @@ class Trainer(TrainerBase):
                         loss = loss / sample_size
 
                 self.backprop(state, loss)
+                self.samples, self.state, self.loss = samples, state, loss
+                if self('after_loss'): break
 
             if report_metric:
                 with timing.time("get pred"):
@@ -651,6 +655,7 @@ class TaskTrainer(Trainer):
         """
         sample_size = len(samples)
         assert sample_size <= self.config.num_accumulated_batches
+        if self('begin_batch'): return
 
         model = state.model
         self.zero_grads(state)
@@ -665,6 +670,8 @@ class TaskTrainer(Trainer):
                         # divide sample_size to let gradients averaged per example
                         loss = loss / sample_size
                 self.backprop(state, loss)
+                self.samples, self.state, self.loss = samples, state, loss
+                self('after_loss')
 
             if report_metric:
                 with timing.time("add metrics"):
@@ -680,6 +687,7 @@ class TaskTrainer(Trainer):
         # update gradients after #len(samples) forward & backward
         self.optimizer_step(state)
         self.sparsification_step(state)
+        self('after_batch')
 
     def _prepare_scheduler(self, training_batches, scheduler=None):
         """Batch based schedulers require knowing the number of batches in

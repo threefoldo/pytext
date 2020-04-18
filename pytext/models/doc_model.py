@@ -39,6 +39,7 @@ from pytext.models.output_layers.doc_classification_output_layer import (
 from pytext.models.representations.bilstm_doc_attention import BiLSTMDocAttention
 from pytext.models.representations.deepcnn import DeepCNNRepresentation
 from pytext.models.representations.docnn import DocNNRepresentation
+from pytext.models.representations.fast_text import FastTextRepresentation
 from pytext.models.representations.pure_doc_attention import PureDocAttention
 from pytext.models.representations.representation_base import RepresentationBase
 from pytext.torchscript.utils import (
@@ -72,6 +73,7 @@ class DocModel(Model):
             BiLSTMDocAttention.Config,
             DocNNRepresentation.Config,
             DeepCNNRepresentation.Config,
+            FastTextRepresentation.Config
         ] = BiLSTMDocAttention.Config()
         decoder: MLPDecoder.Config = MLPDecoder.Config()
         output_layer: ClassificationOutputLayer.Config = (
